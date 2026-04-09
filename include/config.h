@@ -1,0 +1,8 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define REED_SWITCH 5
+#define REED_SWITCH_DEBOUNCE_MS 10
+#define DATA_UPLOAD_INTERVAL_MS 60 * 1000
+
+#endif CONFIG_H
