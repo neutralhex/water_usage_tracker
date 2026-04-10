@@ -1,49 +1,33 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include "secrets.h"
+#include "IPAddress.h"
 #include "config.h"
+#include "secrets.h"
 
+//WiFiClient wifi_client;
+//HTTPClient http_client;
+
+
+volatile bool wifi_connected = false;
 volatile int reed_trigger_count = 0;
 volatile unsigned long last_interrupt_time = 0;
 unsigned long last_send_time_ms = 0;
 
-void connect_wifi(const char *ssid, const char *password);
-void upload_to_influxdb();
-
 void IRAM_ATTR reed_switch_isr();
+void onWifiEvent(WiFiEvent_t event);
 
 void setup() {
     Serial.begin(115200);
 
-    // this will block forever as 
-    // there is no point in not having wifi
-    //connect_wifi(SSID, PASSWORD);
+    WiFi.mode(WIFI_MODE_STA);
+    WiFi.onEvent(onWifiEvent);
+    WiFi.begin(SSID, PASSWORD);
 
     pinMode(REED_SWITCH, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(REED_SWITCH), reed_switch_isr, FALLING);
 }
 
-void loop() {
-    unsigned long now = millis();
-    if (now - last_send_time_ms > DATA_UPLOAD_INTERVAL_MS) {
-        last_send_time_ms = now;
-        upload_to_influxdb();
-        reed_trigger_count = 0;
-    }
-}
-
-void connect_wifi(const char *ssid, const char *password) {
-    WiFi.begin(ssid, password);
-
-    Serial.print("Connecting to wifi");
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-
-    Serial.println("Connected");
-    Serial.println(WiFi.localIP());
-}
+void loop() { }
 
 void IRAM_ATTR reed_switch_isr() {
     unsigned long now = millis();
@@ -54,7 +38,24 @@ void IRAM_ATTR reed_switch_isr() {
     }
 }
 
-void upload_to_influxdb() {
-    Serial.println("Sending data to influxdb");
-    return;
+void onWifiEvent(WiFiEvent_t event) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_AP_START:
+            Serial.println("Wifi started.");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+            Serial.println("Wifi connected.");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            Serial.print("IP received: ");
+            Serial.println(WiFi.localIP());
+            wifi_connected = true;
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            Serial.println("Wifi disconnected.");
+            wifi_connected = false;
+            break;
+        default:
+            break;
+    }
 }

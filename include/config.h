@@ -5,4 +5,6 @@
 #define REED_SWITCH_DEBOUNCE_MS 10
 #define DATA_UPLOAD_INTERVAL_MS 60 * 1000
 
-#endif CONFIG_H
+const char *influx_server = "http://localhost:8086";
+
+#endif

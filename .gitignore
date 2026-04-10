@@ -1,2 +1,3 @@
+.cache/
 .pio
-secrets.h
+secrets.c
