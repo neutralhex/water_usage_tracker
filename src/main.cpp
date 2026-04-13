@@ -1,23 +1,31 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <cstdint>
+#include <stdint.h>
+#include <stdbool.h>
+
 #include "config.h"
+#include "freertos/portmacro.h"
 #include "secrets.h"
 
-volatile bool wifi_connected = false;
-volatile int reed_trigger_count = 0;
-volatile unsigned long last_interrupt_time = 0;
-unsigned long last_send_time_ms = 0;
+static volatile bool wifi_connected = false;
+static volatile uint16_t reed_trigger_count = 0;
 
-void IRAM_ATTR reed_switch_isr();
-void wifi_event_cb(WiFiEvent_t event);
-void status_led_task(void *parameters);
+static void wifi_event_cb(WiFiEvent_t event);
+static void status_led_task(void *parameters);
+static void influxdb_http_post_task(void *parameters);
+static void reed_poll_task(void *parameters);
+
+typedef enum {
+    IDLE,
+    DEBOUNCING
+} state_t;
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(BAUD_RATE);
 
     pinMode(LED, OUTPUT);
     pinMode(REED_SWITCH, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(REED_SWITCH), reed_switch_isr, FALLING);
 
     xTaskCreatePinnedToCore(
         status_led_task,
@@ -36,16 +44,7 @@ void setup() {
 
 void loop() { }
 
-void IRAM_ATTR reed_switch_isr() {
-    unsigned long now = millis();
-
-    if (now - last_interrupt_time >= REED_SWITCH_DEBOUNCE_MS) {
-        reed_trigger_count++;
-        last_interrupt_time = now; 
-    }
-}
-
-void wifi_event_cb(WiFiEvent_t event) {
+static void wifi_event_cb(WiFiEvent_t event) {
     switch (event) {
         case ARDUINO_EVENT_WIFI_AP_START:
             Serial.println("Wifi started.");
@@ -67,8 +66,8 @@ void wifi_event_cb(WiFiEvent_t event) {
     }
 }
 
-void status_led_task(void *parameters) {
-    int delay;
+static void status_led_task(void *parameters) {
+    uint16_t delay;
 
     while(1) {
         if (wifi_connected)
@@ -81,4 +80,46 @@ void status_led_task(void *parameters) {
         digitalWrite(LED, 0);
         vTaskDelay(delay / portTICK_PERIOD_MS);
     }
+}
+
+void reed_poll_task(void *parameters) {
+    const TickType_t period_ms = 10;
+    const TickType_t debounce_ms = 15;
+
+    state_t state = IDLE;
+    TickType_t last_change_time = 0;
+
+    int8_t last_stable_level = HIGH;
+
+    while (1) {
+        int8_t level = digitalRead(REED_SWITCH);
+        TickType_t now = xTaskGetTickCount();
+
+        switch (state) {
+            case IDLE:
+                if (last_stable_level == HIGH && level == LOW) {
+                    state = DEBOUNCING;
+                    last_change_time = now;
+                }
+            break;
+            case DEBOUNCING:
+                if ((now - last_change_time) >= debounce_ms) {
+
+                    int stable_level = digitalRead(REED_SWITCH);
+
+                    if (stable_level == LOW && last_stable_level == HIGH) {
+                        last_stable_level = LOW;
+
+                        reed_trigger_count++;
+                    } else {
+                        last_stable_level = stable_level;
+                    }
+
+                    state = IDLE;
+                }
+            break;
+        }
+    }
+
+    vTaskDelay(period_ms);
 }
