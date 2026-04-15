@@ -1,11 +1,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <cstdint>
 #include <stdint.h>
 #include <stdbool.h>
 
 #include "config.h"
-#include "freertos/portmacro.h"
 #include "secrets.h"
 
 static volatile bool wifi_connected = false;
@@ -18,8 +16,9 @@ static void reed_poll_task(void *parameters);
 
 typedef enum {
     IDLE,
-    DEBOUNCING
-} state_t;
+    DEBOUNCING,
+    TRIGGERED
+} ReedSwitchState_t;
 
 void setup() {
     Serial.begin(BAUD_RATE);
@@ -31,6 +30,16 @@ void setup() {
         status_led_task,
         "Status LED",
         1024,
+        NULL,
+        2,
+        NULL,
+        1
+    );
+
+    xTaskCreatePinnedToCore(
+        reed_poll_task,
+        "Polling the Reed Switch",
+        2048,
         NULL,
         1,
         NULL,
@@ -83,13 +92,11 @@ static void status_led_task(void *parameters) {
 }
 
 void reed_poll_task(void *parameters) {
-    const TickType_t period_ms = 10;
-    const TickType_t debounce_ms = 15;
+    const TickType_t period = pdMS_TO_TICKS(10);
+    const TickType_t debounce = pdMS_TO_TICKS(50);
 
-    state_t state = IDLE;
+    ReedSwitchState_t state = IDLE;
     TickType_t last_change_time = 0;
-
-    int8_t last_stable_level = HIGH;
 
     while (1) {
         int8_t level = digitalRead(REED_SWITCH);
@@ -97,29 +104,27 @@ void reed_poll_task(void *parameters) {
 
         switch (state) {
             case IDLE:
-                if (last_stable_level == HIGH && level == LOW) {
+                if (level == LOW) {
                     state = DEBOUNCING;
                     last_change_time = now;
                 }
             break;
             case DEBOUNCING:
-                if ((now - last_change_time) >= debounce_ms) {
-
-                    int stable_level = digitalRead(REED_SWITCH);
-
-                    if (stable_level == LOW && last_stable_level == HIGH) {
-                        last_stable_level = LOW;
-
-                        reed_trigger_count++;
-                    } else {
-                        last_stable_level = stable_level;
-                    }
-
+                if (level == HIGH) {
+                    state = IDLE;
+                } else if (now - last_change_time >= debounce) {
+                    state = TRIGGERED;
+                }
+             break;
+            case TRIGGERED:
+                if (level == HIGH) {
+                    reed_trigger_count++;
+                    Serial.printf("PULSE DETECTED, count: %d\n", reed_trigger_count);
                     state = IDLE;
                 }
             break;
         }
-    }
 
-    vTaskDelay(period_ms);
+        vTaskDelay(period);
+    }
 }
