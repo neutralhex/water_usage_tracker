@@ -6,6 +6,7 @@
 #define REED_SWITCH_DEBOUNCE_MS 10
 #define DATA_UPLOAD_INTERVAL_MS 60 * 1000
 #define BAUD_RATE 115200
+#define QUEUE_LENGTH 64
 
 const char *influx_server = "http://localhost:8086";
 

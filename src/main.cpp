@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -8,11 +9,13 @@
 
 static volatile bool wifi_connected = false;
 static volatile uint16_t reed_trigger_count = 0;
+static QueueHandle_t reed_count_queue;
 
 static void wifi_event_cb(WiFiEvent_t event);
 static void status_led_task(void *parameters);
-static void influxdb_http_post_task(void *parameters);
 static void reed_poll_task(void *parameters);
+static void aggregation_task(void *parameters);
+static void influxdb_http_post_task(void *parameters);
 
 typedef enum {
     IDLE,
@@ -23,8 +26,14 @@ typedef enum {
 void setup() {
     Serial.begin(BAUD_RATE);
 
+    WiFi.mode(WIFI_MODE_STA);
+    WiFi.onEvent(wifi_event_cb);
+    WiFi.begin(SSID, PASSWORD);
+
     pinMode(LED, OUTPUT);
     pinMode(REED_SWITCH, INPUT_PULLUP);
+
+    reed_count_queue = xQueueCreate(QUEUE_LENGTH, sizeof(uint16_t));
 
     xTaskCreatePinnedToCore(
         status_led_task,
@@ -46,9 +55,25 @@ void setup() {
         1
     );
 
-    WiFi.mode(WIFI_MODE_STA);
-    WiFi.onEvent(wifi_event_cb);
-    WiFi.begin(SSID, PASSWORD);
+    xTaskCreatePinnedToCore(
+        aggregation_task,
+        "Queues the current trigger count",
+        2048,
+        NULL,
+        1,
+        NULL,
+        1
+    );
+
+    xTaskCreatePinnedToCore(
+        influxdb_http_post_task,
+        "Uploads the value to influx",
+        4096,
+        NULL,
+        1,
+        NULL,
+        1
+    );
 }
 
 void loop() { }
@@ -126,5 +151,64 @@ void reed_poll_task(void *parameters) {
         }
 
         vTaskDelay(period);
+    }
+}
+
+static void aggregation_task(void *parameters) {
+    //consider renaming data upload interval
+    const TickType_t delay = pdMS_TO_TICKS(DATA_UPLOAD_INTERVAL_MS);
+
+    while(1) {
+        vTaskDelay(delay);
+
+        uint16_t value = reed_trigger_count;
+        xQueueSend(reed_count_queue, &value, 0);
+        reed_trigger_count = 0;
+    }
+}
+
+static void influxdb_http_post_task(void *parameters) {
+    const TickType_t waiting_period = pdMS_TO_TICKS(1000);
+    uint16_t value;
+
+    while(1) {
+        if (xQueueReceive(reed_count_queue, &value, 0) == pdTRUE) {
+            Serial.printf("Value received from queue: %d\n", value);
+            WiFiClient wifi_client;
+            HTTPClient http;
+
+            http.begin(wifi_client, INFLUXDB_URL);
+            http.addHeader("Content-Type", "text/plain");
+
+            char auth_header[128];
+            snprintf(auth_header, sizeof(auth_header),
+                     "Token %s",
+                     INFLUXDB_TOKEN);
+
+            http.addHeader("Authorization", auth_header);
+
+            char payload[128];
+            snprintf(
+                payload,
+                sizeof(payload),
+                "water_meter,device=%s reed_trigger_count=%di",
+                DEVICE_NAME,
+                value
+             );
+
+            Serial.println(payload);
+            uint32_t response = http.POST(payload);
+            if (response > 0) {
+                Serial.print("HTTP Response: ");
+                Serial.println(response);
+            } else {
+                Serial.print("Error: ");
+                Serial.println(response);
+            }
+
+            http.end();
+        }
+
+        vTaskDelay(waiting_period);
     }
 }
