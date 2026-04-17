@@ -171,6 +171,11 @@ static void influxdb_http_post_task(void *parameters) {
     const TickType_t waiting_period = pdMS_TO_TICKS(1000);
     uint16_t value;
 
+    char auth_header[128];
+    snprintf(auth_header, sizeof(auth_header),
+             "Token %s",
+             INFLUXDB_TOKEN);
+
     while(1) {
         if (xQueueReceive(reed_count_queue, &value, 0) == pdTRUE) {
             Serial.printf("Value received from queue: %d\n", value);
@@ -179,12 +184,6 @@ static void influxdb_http_post_task(void *parameters) {
 
             http.begin(wifi_client, INFLUXDB_URL);
             http.addHeader("Content-Type", "text/plain");
-
-            char auth_header[128];
-            snprintf(auth_header, sizeof(auth_header),
-                     "Token %s",
-                     INFLUXDB_TOKEN);
-
             http.addHeader("Authorization", auth_header);
 
             char payload[128];
